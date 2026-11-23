@@ -2,9 +2,11 @@ package com.lingocast.app
 
 import com.lingocast.app.data.db.SavedWordEntity
 import com.lingocast.app.data.dict.OfflineDictionary
+import com.lingocast.app.data.importexport.SubscriptionUrlNormalizer
 import com.lingocast.app.data.model.EpisodeBundleJson
 import com.lingocast.app.data.model.MediaInfoJson
 import com.lingocast.app.data.model.SentenceJson
+import com.lingocast.app.data.model.SubscriptionFeedJson
 import com.lingocast.app.data.model.TimelineNoteJson
 import com.lingocast.app.data.model.VocabItemJson
 import com.lingocast.app.data.model.WordTimingJson
@@ -176,5 +178,53 @@ class LingoCastUnitTests {
         val parsed = Json { ignoreUnknownKeys = true }.decodeFromString<EpisodeBundleJson>(raw)
         assertEquals("Road Trip", parsed.title)
         assertEquals(1, parsed.sentences.size)
+    }
+
+    @Test
+    fun subscriptionUrlNormalizer_andFeedJson_workCorrectly() {
+        assertEquals(
+            "https://courses.example.com",
+            SubscriptionUrlNormalizer.normalizeBaseUrl("https://courses.example.com/feed.json")
+        )
+        assertEquals(
+            "https://courses.example.com",
+            SubscriptionUrlNormalizer.normalizeBaseUrl("courses.example.com/api/v1/feed.json/")
+        )
+        assertEquals(
+            "http://192.168.1.50:8765",
+            SubscriptionUrlNormalizer.normalizeBaseUrl("192.168.1.50:8765/catalog.json")
+        )
+        assertEquals(
+            "http://localhost:8765",
+            SubscriptionUrlNormalizer.normalizeBaseUrl("localhost:8765")
+        )
+
+        val feedRaw = """
+            {
+              "protocol": "lingocast-feed",
+              "protocolVersion": 1,
+              "feedId": "lingocast-test",
+              "title": "Demo English Feed",
+              "totalSeries": 1,
+              "totalEpisodes": 2,
+              "totalAudioBytes": 12000000,
+              "totalVideoBytes": 48000000,
+              "series": [
+                {
+                  "seriesId": "sample-series",
+                  "title": "Sample Series",
+                  "titleZh": "示例专辑",
+                  "manifestPath": "sample-series/manifest.json",
+                  "episodeCount": 2,
+                  "audioTotalBytes": 12000000,
+                  "videoTotalBytes": 48000000
+                }
+              ]
+            }
+        """.trimIndent()
+        val feed = Json { ignoreUnknownKeys = true }.decodeFromString<SubscriptionFeedJson>(feedRaw)
+        assertEquals("lingocast-feed", feed.protocol)
+        assertEquals(2, feed.totalEpisodes)
+        assertEquals(48_000_000L, feed.series.first().videoTotalBytes)
     }
 }

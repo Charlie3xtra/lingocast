@@ -112,6 +112,11 @@ private fun LingoCastAppRoot(
     val savedWords by container.repository.observeSavedWords().collectAsStateWithLifecycle(emptyList())
     val dueWords by container.repository.observeDueWords().collectAsStateWithLifecycle(emptyList())
 
+    // Pre-warm the most recent episode JSON off the UI thread so tapping "继续精听" opens instantly
+    LaunchedEffect(lastPlayed?.episodeKey) {
+        lastPlayed?.let { runCatching { container.repository.loadEpisodeBundle(it) } }
+    }
+
     val showChrome = currentRoute in TOP_ROUTES
     val adaptiveInfo = currentWindowAdaptiveInfo()
     val layoutType = if (showChrome) {
@@ -154,13 +159,14 @@ private fun LingoCastAppRoot(
                 enterTransition = {
                     val isTabSwitch = initialState.destination.route in TOP_ROUTES &&
                         targetState.destination.route in TOP_ROUTES
-                    if (isTabSwitch) {
-                        fadeIn(tween(220)) + scaleIn(
+                    val isSeriesHero = targetState.destination.route?.startsWith("series/") == true
+                    when {
+                        isTabSwitch -> fadeIn(tween(220)) + scaleIn(
                             initialScale = 0.97f,
                             animationSpec = tween(240, easing = FastOutSlowInEasing)
                         )
-                    } else {
-                        slideInHorizontally(tween(320, easing = FastOutSlowInEasing)) { (it * 0.22f).toInt() } +
+                        isSeriesHero -> fadeIn(tween(300, easing = FastOutSlowInEasing))
+                        else -> slideInHorizontally(tween(320, easing = FastOutSlowInEasing)) { (it * 0.22f).toInt() } +
                             scaleIn(initialScale = 0.95f, animationSpec = tween(320, easing = FastOutSlowInEasing)) +
                             fadeIn(tween(240))
                     }
@@ -168,19 +174,25 @@ private fun LingoCastAppRoot(
                 exitTransition = {
                     val isTabSwitch = initialState.destination.route in TOP_ROUTES &&
                         targetState.destination.route in TOP_ROUTES
-                    if (isTabSwitch) {
-                        fadeOut(tween(150))
-                    } else {
-                        slideOutHorizontally(tween(320, easing = FastOutSlowInEasing)) { -(it * 0.08f).toInt() } +
+                    val isSeriesHero = targetState.destination.route?.startsWith("series/") == true
+                    when {
+                        isTabSwitch -> fadeOut(tween(150))
+                        isSeriesHero -> fadeOut(tween(220))
+                        else -> slideOutHorizontally(tween(320, easing = FastOutSlowInEasing)) { -(it * 0.08f).toInt() } +
                             scaleOut(targetScale = 0.96f, animationSpec = tween(320, easing = FastOutSlowInEasing)) +
                             fadeOut(tween(200))
                     }
                 },
                 // Seekable tween specs enable Android 14-17 Predictive Back edge-swipe scrubbing
                 popEnterTransition = {
-                    scaleIn(initialScale = 0.93f, animationSpec = tween(300, easing = FastOutSlowInEasing)) +
-                        slideInHorizontally(tween(300, easing = FastOutSlowInEasing)) { -(it * 0.08f).toInt() } +
-                        fadeIn(tween(240))
+                    val isFromSeries = initialState.destination.route?.startsWith("series/") == true
+                    if (isFromSeries) {
+                        fadeIn(tween(260, easing = FastOutSlowInEasing))
+                    } else {
+                        scaleIn(initialScale = 0.93f, animationSpec = tween(300, easing = FastOutSlowInEasing)) +
+                            slideInHorizontally(tween(300, easing = FastOutSlowInEasing)) { -(it * 0.08f).toInt() } +
+                            fadeIn(tween(240))
+                    }
                 },
                 popExitTransition = {
                     scaleOut(

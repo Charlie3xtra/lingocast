@@ -50,6 +50,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.MenuBook
 import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.AutoStories
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.EditNote
 import androidx.compose.material.icons.rounded.GraphicEq
@@ -62,6 +63,7 @@ import androidx.compose.material.icons.rounded.RepeatOne
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SkipPrevious
 import androidx.compose.material.icons.rounded.Stop
+import androidx.compose.material.icons.rounded.Translate
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -357,45 +359,118 @@ fun SyncedSubtitleList(
     listState: LazyListState,
     autoFollow: Boolean,
     onResumeFollow: () -> Unit,
+    onToggleChineseTranslation: () -> Unit,
     onSentenceClick: (SentenceJson) -> Unit,
     onWordClick: (word: String, sentence: SentenceJson) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Box(modifier = modifier.fillMaxSize()) {
-        LazyColumn(
-            state = listState,
-            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 6.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-            modifier = Modifier.fillMaxSize()
+    val showChineseEnabled = subtitleMode == SubtitleDisplayMode.BILINGUAL ||
+        subtitleMode == SubtitleDisplayMode.CHINESE_ONLY
+    val chipContainer by animateColorAsState(
+        targetValue = if (showChineseEnabled) {
+            MaterialTheme.colorScheme.primaryContainer
+        } else {
+            MaterialTheme.colorScheme.surfaceContainerHigh
+        },
+        animationSpec = LingoMotion.effectsDefault(),
+        label = "zh_chip_bg"
+    )
+    val chipContent by animateColorAsState(
+        targetValue = if (showChineseEnabled) {
+            MaterialTheme.colorScheme.onPrimaryContainer
+        } else {
+            MaterialTheme.colorScheme.onSurfaceVariant
+        },
+        animationSpec = LingoMotion.effectsDefault(),
+        label = "zh_chip_fg"
+    )
+    val chipInteraction = remember { MutableInteractionSource() }
+
+    Column(modifier = modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 4.dp, vertical = 2.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            itemsIndexed(sentences, key = { _, s -> s.id }) { idx, sentence ->
-                SubtitleSentenceCard(
-                    sentence = sentence,
-                    isActive = idx == activeSentenceIndex,
-                    activeWordIndex = if (idx == activeSentenceIndex) activeWordIndex else -1,
-                    subtitleMode = subtitleMode,
-                    onCardClick = { onSentenceClick(sentence) },
-                    onWordClick = { word -> onWordClick(word, sentence) }
-                )
+            Text(
+                text = if (activeSentenceIndex >= 0) {
+                    "同步字幕 · 句 ${activeSentenceIndex + 1} / ${sentences.size}"
+                } else {
+                    "同步字幕"
+                },
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Surface(
+                onClick = onToggleChineseTranslation,
+                interactionSource = chipInteraction,
+                color = chipContainer,
+                shape = CircleShape,
+                modifier = Modifier.expressivePressScale(chipInteraction)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                ) {
+                    Icon(
+                        imageVector = if (showChineseEnabled) Icons.Rounded.Check else Icons.Rounded.Translate,
+                        contentDescription = null,
+                        tint = chipContent,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Text(
+                        text = "中文翻译",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = if (showChineseEnabled) FontWeight.SemiBold else FontWeight.Medium,
+                        color = chipContent
+                    )
+                }
             }
-            item { Spacer(Modifier.height(64.dp)) }
         }
 
-        AnimatedVisibility(
-            visible = !autoFollow && activeSentenceIndex >= 0,
-            enter = fadeIn(LingoMotion.effectsDefault()) + slideInVertically(LingoMotion.spatialFast()) { it / 2 },
-            exit = fadeOut(LingoMotion.effectsDefault()),
+        Box(
             modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(bottom = 12.dp)
+                .weight(1f)
+                .fillMaxWidth()
         ) {
-            FilledTonalButton(
-                onClick = onResumeFollow,
-                shape = CircleShape
+            LazyColumn(
+                state = listState,
+                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.fillMaxSize()
             ) {
-                Icon(Icons.Rounded.GraphicEq, contentDescription = null, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.width(6.dp))
-                Text("回到当前句")
+                itemsIndexed(sentences, key = { _, s -> s.id }) { idx, sentence ->
+                    SubtitleSentenceCard(
+                        sentence = sentence,
+                        isActive = idx == activeSentenceIndex,
+                        activeWordIndex = if (idx == activeSentenceIndex) activeWordIndex else -1,
+                        subtitleMode = subtitleMode,
+                        onCardClick = { onSentenceClick(sentence) },
+                        onWordClick = { word -> onWordClick(word, sentence) }
+                    )
+                }
+                item { Spacer(Modifier.height(64.dp)) }
+            }
+
+            androidx.compose.animation.AnimatedVisibility(
+                visible = !autoFollow && activeSentenceIndex >= 0,
+                enter = fadeIn(LingoMotion.effectsDefault()) + slideInVertically(LingoMotion.spatialFast()) { it / 2 },
+                exit = fadeOut(LingoMotion.effectsDefault()),
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 12.dp)
+            ) {
+                FilledTonalButton(
+                    onClick = onResumeFollow,
+                    shape = CircleShape
+                ) {
+                    Icon(Icons.Rounded.GraphicEq, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("回到当前句")
+                }
             }
         }
     }
@@ -573,11 +648,19 @@ private fun SubtitleSentenceCard(
                         )
                     }
 
-                    if (showChinese && sentence.textZh.isNotBlank()) {
+                    AnimatedVisibility(
+                        visible = showChinese && sentence.textZh.isNotBlank(),
+                        enter = expandVertically(LingoMotion.spatialFast()) + fadeIn(LingoMotion.effectsDefault()),
+                        exit = shrinkVertically(LingoMotion.spatialFast()) + fadeOut(LingoMotion.effectsDefault())
+                    ) {
                         Text(
                             text = sentence.textZh,
                             style = MaterialTheme.typography.bodyMedium,
-                            color = if (isActive) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.76f)
+                            color = if (isActive) {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.76f)
+                            }
                         )
                     }
                 }

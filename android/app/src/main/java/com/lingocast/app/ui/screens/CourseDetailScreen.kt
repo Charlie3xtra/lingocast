@@ -30,6 +30,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -96,20 +97,25 @@ fun CourseDetailScreen(
                             modifier = Modifier.padding(16.dp),
                             verticalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
-                            if (series.coverPath.isNotBlank() && File(series.coverPath).isFile()) {
+                            val hasCover = remember(series.coverPath) {
+                                series.coverPath.isNotBlank() && File(series.coverPath).isFile()
+                            }
+                            if (hasCover) {
                                 with(sharedTransitionScope) {
                                     AsyncImage(
                                         model = File(series.coverPath),
                                         contentDescription = series.titleZh,
                                         contentScale = ContentScale.Crop,
                                         modifier = Modifier
-                                            .fillMaxWidth()
-                                            .height(176.dp)
-                                            .clip(RoundedCornerShape(18.dp))
                                             .sharedElement(
                                                 rememberSharedContentState(key = "series_cover_${series.seriesId}"),
-                                                animatedVisibilityScope = animatedVisibilityScope
+                                                animatedVisibilityScope = animatedVisibilityScope,
+                                                boundsTransform = LingoMotion.SeriesCoverBoundsTransform,
+                                                clipInOverlayDuringTransition = OverlayClip(LingoMotion.SeriesCoverCornerShape)
                                             )
+                                            .fillMaxWidth()
+                                            .height(184.dp)
+                                            .clip(LingoMotion.SeriesCoverCornerShape)
                                     )
                                 }
                             }

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import mimetypes
 import os
 import re
@@ -97,9 +98,45 @@ def get_lan_ips() -> list[str]:
     return ips or ["127.0.0.1"]
 
 
-def serve_packs(packs_root: Path, port: int = 8765, bind: str = "0.0.0.0") -> None:
+def _load_standalone_feed_module():
+    server_script = Path(__file__).resolve().parents[2] / "server" / "lingocast_server.py"
+    if not server_script.is_file():
+        return None
+    spec = importlib.util.spec_from_file_location("lingocast_standalone_server", server_script)
+    if spec is None or spec.loader is None:
+        return None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def serve_packs(packs_root: Path, port: int = 8765, bind: str = "0.0.0.0", token: str = "") -> None:
     if not packs_root.is_dir():
         raise FileNotFoundError(f"Packs directory not found: {packs_root}")
+
+    feed_mod = _load_standalone_feed_module()
+    if feed_mod is not None:
+        feed_index = feed_mod.FeedIndex(
+            packs_root=packs_root,
+            title="LingoCast 英语精听课程订阅",
+            description="LingoCast 本地课程同步与订阅源服务。",
+        )
+        server = feed_mod.LingoCastHTTPServer((bind, port), feed_index, auth_token=token)
+        feed, _ = feed_index.snapshot()
+        print(
+            f"[serve] Serving LingoCast Subscription Feed v1 ({feed.get('totalSeries', 0)} series / {feed.get('totalEpisodes', 0)} episodes) from: {packs_root}"
+        )
+        for ip in get_lan_ips():
+            print(f"  -> Android Subscription / Wi-Fi URL: http://{ip}:{port}/feed.json")
+        print("Press Ctrl+C to stop.")
+        try:
+            server.serve_forever()
+        except KeyboardInterrupt:
+            print("\n[serve] Stopped.")
+        finally:
+            server.server_close()
+        return
+
     handler = partial(RangeHTTPRequestHandler, directory=str(packs_root))
     server = ThreadingHTTPServer((bind, port), handler)
     ips = get_lan_ips()

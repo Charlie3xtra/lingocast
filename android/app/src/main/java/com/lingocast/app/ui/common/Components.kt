@@ -1,19 +1,26 @@
 package com.lingocast.app.ui.common
 
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.InteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -64,6 +71,8 @@ import androidx.compose.ui.unit.dp
 import com.lingocast.app.data.model.DictionaryResult
 import com.lingocast.app.ui.theme.LingoMotion
 import com.lingocast.app.ui.theme.TabularNumeralStyle
+import kotlin.math.PI
+import kotlin.math.sin
 
 fun formatDurationMs(ms: Long): String {
     val totalSec = (ms / 1000L).coerceAtLeast(0L)
@@ -116,6 +125,224 @@ fun Modifier.expressivePressScale(interactionSource: InteractionSource): Modifie
         label = "press_scale"
     )
     return this.scale(scale)
+}
+
+@Composable
+fun WavyMediaProgressBar(
+    positionMs: Long,
+    durationMs: Long,
+    isPlaying: Boolean,
+    loopAMs: Long? = null,
+    loopBMs: Long? = null,
+    onScrubbingPositionChange: (Long?) -> Unit = {},
+    onSeek: (Long) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val safeDur = durationMs.coerceAtLeast(1L)
+    var isDragging by remember { mutableStateOf(false) }
+    var dragFraction by remember { mutableFloatStateOf(0f) }
+
+    val rawFraction = if (isDragging) {
+        dragFraction.coerceIn(0f, 1f)
+    } else {
+        (positionMs.toFloat() / safeDur.toFloat()).coerceIn(0f, 1f)
+    }
+
+    val animatedProgress by animateFloatAsState(
+        targetValue = rawFraction,
+        animationSpec = tween(durationMillis = if (isDragging) 0 else 55, easing = LinearEasing),
+        label = "wavy_progress"
+    )
+    val displayProgress = if (isDragging) rawFraction else animatedProgress
+
+    val amplitudeFactor by animateFloatAsState(
+        targetValue = if (isPlaying && !isDragging) 1f else 0f,
+        animationSpec = LingoMotion.spatialDefault(),
+        label = "wavy_amplitude"
+    )
+
+    var phaseRad by remember { mutableFloatStateOf(0f) }
+    val waveAnimating = (isPlaying && !isDragging) || amplitudeFactor > 0.01f
+    LaunchedEffect(waveAnimating) {
+        if (!waveAnimating) return@LaunchedEffect
+        var lastNanos = 0L
+        val twoPi = (2.0 * PI).toFloat()
+        val omegaRadPerSec = twoPi * 1.15f
+        while (true) {
+            withFrameNanos { frameNanos ->
+                if (lastNanos != 0L) {
+                    val dtSec = ((frameNanos - lastNanos).coerceIn(0L, 50_000_000L)) / 1_000_000_000f
+                    phaseRad = (phaseRad + dtSec * omegaRadPerSec) % twoPi
+                }
+                lastNanos = frameNanos
+            }
+        }
+    }
+
+    val handleWidth by animateDpAsState(
+        targetValue = if (isDragging) 5.dp else 4.dp,
+        animationSpec = LingoMotion.expressiveBouncy(),
+        label = "handle_w"
+    )
+    val handleHeight by animateDpAsState(
+        targetValue = if (isDragging) 24.dp else 18.dp,
+        animationSpec = LingoMotion.expressiveBouncy(),
+        label = "handle_h"
+    )
+
+    val trackColor = MaterialTheme.colorScheme.surfaceContainerHighest
+    val activeColor = MaterialTheme.colorScheme.primary
+    val loopRangeColor = MaterialTheme.colorScheme.tertiary
+    val haloColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)
+    val wavePath = remember { Path() }
+
+    Canvas(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(34.dp)
+            .pointerInput(safeDur) {
+                detectTapGestures { offset ->
+                    val frac = (offset.x / size.width.coerceAtLeast(1)).coerceIn(0f, 1f)
+                    onSeek((frac * safeDur).toLong())
+                }
+            }
+            .pointerInput(safeDur) {
+                detectHorizontalDragGestures(
+                    onDragStart = { offset ->
+                        isDragging = true
+                        val frac = (offset.x / size.width.coerceAtLeast(1)).coerceIn(0f, 1f)
+                        dragFraction = frac
+                        onScrubbingPositionChange((frac * safeDur).toLong())
+                    },
+                    onDragEnd = {
+                        onSeek((dragFraction * safeDur).toLong())
+                        onScrubbingPositionChange(null)
+                        isDragging = false
+                    },
+                    onDragCancel = {
+                        onScrubbingPositionChange(null)
+                        isDragging = false
+                    },
+                    onHorizontalDrag = { change, _ ->
+                        change.consume()
+                        val frac = (change.position.x / size.width.coerceAtLeast(1)).coerceIn(0f, 1f)
+                        dragFraction = frac
+                        onScrubbingPositionChange((frac * safeDur).toLong())
+                    }
+                )
+            }
+    ) {
+        val strokePx = 3.5.dp.toPx()
+        val cy = size.height / 2f
+        val pad = 8.dp.toPx()
+        val usableW = (size.width - pad * 2f).coerceAtLeast(1f)
+        val handleX = pad + displayProgress * usableW
+        val gapPx = 6.dp.toPx()
+        val handleW = handleWidth.toPx()
+        val handleH = handleHeight.toPx()
+        val activeEnd = (handleX - handleW / 2f - gapPx).coerceAtLeast(pad)
+        val inactiveStart = (handleX + handleW / 2f + gapPx).coerceAtMost(pad + usableW)
+
+        // Inactive right-side straight track with M3 stop dot
+        if (inactiveStart < pad + usableW - 1f) {
+            drawLine(
+                color = trackColor,
+                start = Offset(inactiveStart, cy),
+                end = Offset(pad + usableW, cy),
+                strokeWidth = strokePx,
+                cap = StrokeCap.Round
+            )
+            if (handleX < pad + usableW - gapPx * 1.6f) {
+                drawCircle(
+                    color = activeColor,
+                    radius = 2.dp.toPx(),
+                    center = Offset(pad + usableW, cy)
+                )
+            }
+        }
+
+        // Active wavy or flat segment (0 -> activeEnd)
+        if (activeEnd > pad + 1f) {
+            val activeLen = activeEnd - pad
+            val ampPx = 3.5.dp.toPx() * amplitudeFactor
+            if (ampPx <= 0.15f) {
+                drawLine(
+                    color = activeColor,
+                    start = Offset(pad, cy),
+                    end = Offset(activeEnd, cy),
+                    strokeWidth = strokePx,
+                    cap = StrokeCap.Round
+                )
+            } else {
+                val wavelengthPx = 28.dp.toPx()
+                val twoPi = (2.0 * PI).toFloat()
+                val stepPx = 2.5f
+                val startTaperPx = 6.dp.toPx()
+                val endTaperPx = 10.dp.toPx()
+
+                fun smoothstep01(t: Float): Float {
+                    val x = t.coerceIn(0f, 1f)
+                    return x * x * (3f - 2f * x)
+                }
+
+                fun waveY(dx: Float): Float {
+                    val leftFade = smoothstep01(dx / startTaperPx)
+                    val rightFade = smoothstep01((activeLen - dx) / endTaperPx)
+                    val localAmp = ampPx * minOf(leftFade, rightFade)
+                    return cy + sin((dx / wavelengthPx) * twoPi - phaseRad) * localAmp
+                }
+
+                wavePath.reset()
+                wavePath.moveTo(pad, waveY(0f))
+                var dx = stepPx
+                while (dx < activeLen) {
+                    wavePath.lineTo(pad + dx, waveY(dx))
+                    dx += stepPx
+                }
+                wavePath.lineTo(activeEnd, waveY(activeLen))
+                drawPath(
+                    path = wavePath,
+                    color = activeColor,
+                    style = Stroke(width = strokePx, cap = StrokeCap.Round, join = StrokeJoin.Round)
+                )
+            }
+        }
+
+        // A-B loop segment & markers
+        if (loopAMs != null && loopBMs != null && loopBMs > loopAMs) {
+            val ax = pad + (loopAMs.toFloat() / safeDur).coerceIn(0f, 1f) * usableW
+            val bx = pad + (loopBMs.toFloat() / safeDur).coerceIn(0f, 1f) * usableW
+            drawLine(
+                color = loopRangeColor.copy(alpha = 0.85f),
+                start = Offset(ax, cy),
+                end = Offset(bx, cy),
+                strokeWidth = strokePx + 1.5.dp.toPx(),
+                cap = StrokeCap.Round
+            )
+            val markerH = 6.dp.toPx()
+            drawLine(loopRangeColor, Offset(ax, cy - markerH), Offset(ax, cy + markerH), strokeWidth = 2.dp.toPx(), cap = StrokeCap.Round)
+            drawLine(loopRangeColor, Offset(bx, cy - markerH), Offset(bx, cy + markerH), strokeWidth = 2.dp.toPx(), cap = StrokeCap.Round)
+        } else if (loopAMs != null) {
+            val ax = pad + (loopAMs.toFloat() / safeDur).coerceIn(0f, 1f) * usableW
+            drawCircle(color = loopRangeColor, radius = 4.dp.toPx(), center = Offset(ax, cy))
+        }
+
+        // Floating vertical pill handle (official Material 3 Expressive handle)
+        if (isDragging) {
+            drawRoundRect(
+                color = haloColor,
+                topLeft = Offset(handleX - handleW * 1.4f, cy - handleH * 0.68f),
+                size = Size(handleW * 2.8f, handleH * 1.36f),
+                cornerRadius = CornerRadius(handleW * 1.4f, handleW * 1.4f)
+            )
+        }
+        drawRoundRect(
+            color = activeColor,
+            topLeft = Offset(handleX - handleW / 2f, cy - handleH / 2f),
+            size = Size(handleW, handleH),
+            cornerRadius = CornerRadius(handleW / 2f, handleW / 2f)
+        )
+    }
 }
 
 @Composable

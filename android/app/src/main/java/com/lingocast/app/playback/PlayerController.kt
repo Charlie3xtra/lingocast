@@ -28,6 +28,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 
 data class PlaybackUiState(
@@ -58,8 +59,12 @@ class PlayerController(
     private var exoPlayer: ExoPlayer? = null
     private var serviceStarted = false
     private var tickerJob: Job? = null
+    private var openJob: Job? = null
     private var lastPersistedTickMs = 0L
     private var clipStopAtMs: Long? = null
+
+    private val _positionMs = MutableStateFlow(0L)
+    val positionMs: StateFlow<Long> = _positionMs.asStateFlow()
 
     private val _uiState = MutableStateFlow(
         PlaybackUiState(subtitleMode = preferences.state.value.defaultSubMode)
@@ -104,19 +109,31 @@ class PlayerController(
         }
     }
 
-    fun openEpisode(episodeKey: String, startPositionMs: Long? = null, autoPlay: Boolean = true) {
-        scope.launch {
+    fun openEpisode(
+        episodeKey: String,
+        startPositionMs: Long? = null,
+        autoPlay: Boolean = true,
+        deferMediaMs: Long = 280L
+    ) {
+        openJob?.cancel()
+        openJob = scope.launch {
             val current = _uiState.value.episode
             if (current?.episodeKey == episodeKey && _uiState.value.bundle != null) {
                 if (startPositionMs != null) {
-                    seekTo(startPositionMs)
+                    _positionMs.value = startPositionMs
+                    syncTimelineAt(startPositionMs, forcePositionState = true)
+                }
+                if (deferMediaMs > 0L) delay(deferMediaMs)
+                if (startPositionMs != null) {
+                    val dur = _uiState.value.durationMs.coerceAtLeast(1L)
+                    getOrCreateExoPlayer().seekTo(startPositionMs.coerceIn(0L, dur))
                 }
                 if (autoPlay) play()
                 return@launch
             }
 
             _uiState.value = _uiState.value.copy(isLoading = true, errorMessage = null)
-            val ep = repository.getEpisode(episodeKey)
+            val ep = withContext(Dispatchers.IO) { repository.getEpisode(episodeKey) }
             if (ep == null) {
                 _uiState.value = _uiState.value.copy(isLoading = false, errorMessage = "未找到课程剧集")
                 return@launch
@@ -127,9 +144,15 @@ class PlayerController(
                 return@launch
             }
 
-            val useVideo = ep.hasVideo && !ep.videoPath.isNullOrBlank() && File(ep.videoPath).isFile()
+            val useVideo = withContext(Dispatchers.IO) {
+                ep.hasVideo && !ep.videoPath.isNullOrBlank() && File(ep.videoPath).isFile()
+            }
             val resumeMs = startPositionMs ?: ep.lastPositionMs.takeIf { it > 0L && it < ep.durationMs - 4000L } ?: 0L
+            val initialSentIdx = TimelineTracker.findActiveSentenceIndex(bundle.sentences, resumeMs)
+            val initialWordIdx = TimelineTracker.findActiveWordIndex(bundle.sentences.getOrNull(initialSentIdx), resumeMs)
+            val initialEntries = TimelineTracker.resolveActiveVocabEntries(bundle, initialSentIdx)
 
+            _positionMs.value = resumeMs
             _uiState.value = _uiState.value.copy(
                 episode = ep,
                 bundle = bundle,
@@ -140,13 +163,12 @@ class PlayerController(
                 singleSentenceLoop = false,
                 loopAMs = null,
                 loopBMs = null,
-                activeSentenceIndex = TimelineTracker.findActiveSentenceIndex(bundle.sentences, resumeMs),
-                activeWordIndex = -1,
-                activeTimelineEntries = TimelineTracker.resolveActiveVocabEntries(
-                    bundle,
-                    TimelineTracker.findActiveSentenceIndex(bundle.sentences, resumeMs)
-                )
+                activeSentenceIndex = initialSentIdx,
+                activeWordIndex = initialWordIdx,
+                activeTimelineEntries = initialEntries
             )
+            // Let page transition animate smoothly before ExoPlayer prepare/decoder startup
+            if (deferMediaMs > 0L) delay(deferMediaMs)
             loadMediaIntoPlayer(ep, useVideo, resumeMs, autoPlay)
         }
     }
@@ -156,7 +178,7 @@ class PlayerController(
             val ep = repository.getEpisode(episodeKey) ?: return@launch
             val currentKey = _uiState.value.episode?.episodeKey
             if (currentKey != episodeKey) {
-                openEpisode(episodeKey, startPositionMs = clipStartMs, autoPlay = true)
+                openEpisode(episodeKey, startPositionMs = clipStartMs, autoPlay = true, deferMediaMs = 0L)
             } else {
                 seekTo(clipStartMs)
                 play()
@@ -165,15 +187,18 @@ class PlayerController(
         }
     }
 
-    private fun loadMediaIntoPlayer(ep: EpisodeEntity, useVideo: Boolean, posMs: Long, autoPlay: Boolean) {
+    private suspend fun loadMediaIntoPlayer(ep: EpisodeEntity, useVideo: Boolean, posMs: Long, autoPlay: Boolean) {
+        val (mediaFile, artworkUri) = withContext(Dispatchers.IO) {
+            val file = if (useVideo && !ep.videoPath.isNullOrBlank() && File(ep.videoPath).isFile()) {
+                File(ep.videoPath)
+            } else {
+                File(ep.audioPath)
+            }
+            val art = ep.coverPath.takeIf { it.isNotBlank() && File(it).isFile() }?.let { Uri.fromFile(File(it)) }
+            file to art
+        }
         ensureServiceStarted()
         val player = getOrCreateExoPlayer()
-        val mediaFile = if (useVideo && !ep.videoPath.isNullOrBlank() && File(ep.videoPath).isFile()) {
-            File(ep.videoPath)
-        } else {
-            File(ep.audioPath)
-        }
-        val artworkUri = ep.coverPath.takeIf { it.isNotBlank() && File(it).isFile() }?.let { Uri.fromFile(File(it)) }
         val metadata = MediaMetadata.Builder()
             .setTitle(ep.titleZh.ifBlank { ep.title })
             .setSubtitle(ep.title)
@@ -193,14 +218,19 @@ class PlayerController(
     }
 
     fun toggleVideoAudioMode() {
-        val state = _uiState.value
-        val ep = state.episode ?: return
-        if (!ep.hasVideo || ep.videoPath.isNullOrBlank() || !File(ep.videoPath).isFile()) return
-        val nextVideo = !state.isVideoMode
-        val pos = exoPlayer?.currentPosition ?: state.positionMs
-        val wasPlaying = exoPlayer?.isPlaying == true
-        _uiState.value = state.copy(isVideoMode = nextVideo)
-        loadMediaIntoPlayer(ep, nextVideo, pos, wasPlaying)
+        scope.launch {
+            val state = _uiState.value
+            val ep = state.episode ?: return@launch
+            val hasVideoFile = withContext(Dispatchers.IO) {
+                ep.hasVideo && !ep.videoPath.isNullOrBlank() && File(ep.videoPath).isFile()
+            }
+            if (!hasVideoFile) return@launch
+            val nextVideo = !state.isVideoMode
+            val pos = exoPlayer?.currentPosition ?: _positionMs.value
+            val wasPlaying = exoPlayer?.isPlaying == true
+            _uiState.value = state.copy(isVideoMode = nextVideo)
+            loadMediaIntoPlayer(ep, nextVideo, pos, wasPlaying)
+        }
     }
 
     fun togglePlayPause() {
@@ -226,11 +256,12 @@ class PlayerController(
         val dur = _uiState.value.durationMs.coerceAtLeast(1L)
         val clamped = ms.coerceIn(0L, dur)
         getOrCreateExoPlayer().seekTo(clamped)
-        syncTimelineAt(clamped)
+        _positionMs.value = clamped
+        syncTimelineAt(clamped, forcePositionState = true)
     }
 
     fun seekRelative(deltaMs: Long) {
-        val cur = exoPlayer?.currentPosition ?: _uiState.value.positionMs
+        val cur = exoPlayer?.currentPosition ?: _positionMs.value
         seekTo(cur + deltaMs)
     }
 
@@ -251,7 +282,17 @@ class PlayerController(
     }
 
     fun setSubtitleMode(mode: SubtitleDisplayMode) {
+        preferences.setDefaultSubMode(mode)
         _uiState.value = _uiState.value.copy(subtitleMode = mode)
+    }
+
+    fun toggleChineseTranslation() {
+        val current = _uiState.value.subtitleMode
+        val next = when (current) {
+            SubtitleDisplayMode.BILINGUAL, SubtitleDisplayMode.CHINESE_ONLY -> SubtitleDisplayMode.ENGLISH_ONLY
+            SubtitleDisplayMode.ENGLISH_ONLY, SubtitleDisplayMode.BLIND -> SubtitleDisplayMode.BILINGUAL
+        }
+        setSubtitleMode(next)
     }
 
     fun toggleSingleSentenceLoop() {
@@ -265,7 +306,7 @@ class PlayerController(
 
     fun toggleABLoopPoint() {
         val state = _uiState.value
-        val cur = exoPlayer?.currentPosition ?: state.positionMs
+        val cur = exoPlayer?.currentPosition ?: _positionMs.value
         when {
             state.loopAMs == null -> {
                 _uiState.value = state.copy(loopAMs = cur, loopBMs = null, singleSentenceLoop = false)
@@ -340,7 +381,8 @@ class PlayerController(
         }
     }
 
-    private fun syncTimelineAt(pos: Long) {
+    private fun syncTimelineAt(pos: Long, forcePositionState: Boolean = false) {
+        _positionMs.value = pos
         val state = _uiState.value
         val bundle = state.bundle ?: return
         val newSentIdx = if (state.singleSentenceLoop && state.activeSentenceIndex in bundle.sentences.indices) {
@@ -360,7 +402,7 @@ class PlayerController(
             state.activeTimelineEntries
         }
 
-        if (pos != state.positionMs || newSentIdx != state.activeSentenceIndex || newWordIdx != state.activeWordIndex) {
+        if (forcePositionState || newSentIdx != state.activeSentenceIndex || newWordIdx != state.activeWordIndex) {
             _uiState.value = state.copy(
                 positionMs = pos,
                 activeSentenceIndex = newSentIdx,
@@ -373,7 +415,7 @@ class PlayerController(
     private fun persistProgress(deltaSeconds: Long) {
         val state = _uiState.value
         val ep = state.episode ?: return
-        val pos = exoPlayer?.currentPosition ?: state.positionMs
+        val pos = exoPlayer?.currentPosition ?: _positionMs.value
         scope.launch {
             repository.updatePlaybackProgress(
                 episodeKey = ep.episodeKey,
@@ -386,6 +428,7 @@ class PlayerController(
 
     fun release() {
         persistProgress(deltaSeconds = 0L)
+        openJob?.cancel()
         tickerJob?.cancel()
         exoPlayer?.release()
         exoPlayer = null

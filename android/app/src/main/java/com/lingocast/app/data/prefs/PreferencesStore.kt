@@ -1,10 +1,13 @@
 package com.lingocast.app.data.prefs
 
 import android.content.Context
+import com.lingocast.app.data.model.SavedSubscription
 import com.lingocast.app.ui.theme.ThemeModePreference
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 
 enum class SubtitleDisplayMode(val labelZh: String) {
     BILINGUAL("中英双语"),
@@ -23,11 +26,16 @@ data class UserPreferences(
     val dynamicColor: Boolean = true,
     val defaultSubMode: SubtitleDisplayMode = SubtitleDisplayMode.BILINGUAL,
     val ttsAccent: TtsAccent = TtsAccent.UK,
-    val lastSyncHost: String = "192.168.31.100:8765"
+    val lastSyncHost: String = "",
+    val subscriptions: List<SavedSubscription> = emptyList()
 )
 
 class PreferencesStore(context: Context) {
     private val prefs = context.getSharedPreferences("lingocast_prefs", Context.MODE_PRIVATE)
+    private val json = Json {
+        ignoreUnknownKeys = true
+        encodeDefaults = true
+    }
 
     private val _state = MutableStateFlow(load())
     val state: StateFlow<UserPreferences> = _state.asStateFlow()
@@ -42,12 +50,19 @@ class PreferencesStore(context: Context) {
         val accent = runCatching {
             TtsAccent.valueOf(prefs.getString("tts_accent", TtsAccent.UK.name)!!)
         }.getOrDefault(TtsAccent.UK)
+        val rawHost = prefs.getString("sync_host", "") ?: ""
+        val cleanHost = if (rawHost == "192.168.31.100:8765") "" else rawHost
+        val subsRaw = prefs.getString("subscriptions_json", "[]") ?: "[]"
+        val subs = runCatching {
+            json.decodeFromString<List<SavedSubscription>>(subsRaw)
+        }.getOrDefault(emptyList())
         return UserPreferences(
             themeMode = theme,
             dynamicColor = prefs.getBoolean("dynamic_color", true),
             defaultSubMode = sub,
             ttsAccent = accent,
-            lastSyncHost = prefs.getString("sync_host", "192.168.31.100:8765") ?: "192.168.31.100:8765"
+            lastSyncHost = cleanHost,
+            subscriptions = subs
         )
     }
 
@@ -72,7 +87,25 @@ class PreferencesStore(context: Context) {
     }
 
     fun setLastSyncHost(host: String) {
-        prefs.edit().putString("sync_host", host).apply()
-        _state.value = _state.value.copy(lastSyncHost = host)
+        prefs.edit().putString("sync_host", host.trim()).apply()
+        _state.value = _state.value.copy(lastSyncHost = host.trim())
+    }
+
+    fun saveSubscription(subscription: SavedSubscription) {
+        val current = _state.value.subscriptions.toMutableList()
+        val idx = current.indexOfFirst { it.id == subscription.id || it.url.equals(subscription.url, ignoreCase = true) }
+        if (idx >= 0) {
+            current[idx] = subscription
+        } else {
+            current.add(0, subscription)
+        }
+        prefs.edit().putString("subscriptions_json", json.encodeToString(current)).apply()
+        _state.value = _state.value.copy(subscriptions = current)
+    }
+
+    fun removeSubscription(id: String) {
+        val next = _state.value.subscriptions.filterNot { it.id == id }
+        prefs.edit().putString("subscriptions_json", json.encodeToString(next)).apply()
+        _state.value = _state.value.copy(subscriptions = next)
     }
 }

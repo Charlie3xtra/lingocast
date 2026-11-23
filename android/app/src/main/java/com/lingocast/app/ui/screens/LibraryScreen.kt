@@ -272,6 +272,9 @@ private fun ResumeHeroCard(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(14.dp)
         ) {
+            val hasHeroCover = remember(episode.coverPath) {
+                episode.coverPath.isNotBlank() && File(episode.coverPath).isFile()
+            }
             Box(
                 modifier = Modifier
                     .size(72.dp)
@@ -279,7 +282,7 @@ private fun ResumeHeroCard(
                     .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)),
                 contentAlignment = Alignment.Center
             ) {
-                if (episode.coverPath.isNotBlank() && File(episode.coverPath).isFile()) {
+                if (hasHeroCover) {
                     AsyncImage(
                         model = File(episode.coverPath),
                         contentDescription = null,
@@ -351,10 +354,13 @@ private fun SeriesCollectionCard(
     onClick: () -> Unit
 ) {
     val interactionSource = remember { MutableInteractionSource() }
+    val hasCover = remember(series.coverPath) {
+        series.coverPath.isNotBlank() && File(series.coverPath).isFile()
+    }
     ElevatedCard(
         onClick = onClick,
         interactionSource = interactionSource,
-        shape = RoundedCornerShape(24.dp),
+        shape = RoundedCornerShape(28.dp),
         colors = CardDefaults.elevatedCardColors(
             containerColor = MaterialTheme.colorScheme.surfaceContainerLow
         ),
@@ -366,11 +372,11 @@ private fun SeriesCollectionCard(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(148.dp)
-                    .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                    .padding(start = 6.dp, end = 6.dp, top = 6.dp)
+                    .height(152.dp)
             ) {
-                with(sharedTransitionScope) {
-                    if (series.coverPath.isNotBlank() && File(series.coverPath).isFile()) {
+                if (hasCover) {
+                    with(sharedTransitionScope) {
                         AsyncImage(
                             model = File(series.coverPath),
                             contentDescription = series.titleZh,
@@ -379,14 +385,25 @@ private fun SeriesCollectionCard(
                                 .fillMaxSize()
                                 .sharedElement(
                                     rememberSharedContentState(key = "series_cover_${series.seriesId}"),
-                                    animatedVisibilityScope = animatedVisibilityScope
+                                    animatedVisibilityScope = animatedVisibilityScope,
+                                    boundsTransform = LingoMotion.SeriesCoverBoundsTransform,
+                                    clipInOverlayDuringTransition = OverlayClip(LingoMotion.SeriesCoverCornerShape)
                                 )
+                                .clip(LingoMotion.SeriesCoverCornerShape)
                         )
                     }
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .clip(LingoMotion.SeriesCoverCornerShape)
+                            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                    )
                 }
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
+                        .clip(LingoMotion.SeriesCoverCornerShape)
                         .background(
                             Brush.verticalGradient(
                                 listOf(Color.Transparent, Color.Black.copy(alpha = 0.72f))
@@ -465,6 +482,9 @@ fun EpisodeRowCard(
             .expressivePressScale(interactionSource)
     ) {
         Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            val hasEpCover = remember(episode.coverPath) {
+                episode.coverPath.isNotBlank() && File(episode.coverPath).isFile()
+            }
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -476,7 +496,7 @@ fun EpisodeRowCard(
                         .background(MaterialTheme.colorScheme.surfaceContainerHigh),
                     contentAlignment = Alignment.Center
                 ) {
-                    if (episode.coverPath.isNotBlank() && File(episode.coverPath).isFile()) {
+                    if (hasEpCover) {
                         AsyncImage(
                             model = File(episode.coverPath),
                             contentDescription = null,

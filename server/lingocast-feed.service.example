@@ -1,0 +1,14 @@
+[Unit]
+Description=LingoCast Subscription Feed v1 HTTP Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/lingocast
+ExecStart=/usr/bin/python3 /opt/lingocast/lingocast_server.py --packs-dir /opt/lingocast/packs --host 0.0.0.0 --port 8765
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

@@ -43,6 +43,9 @@ interface EpisodeDao {
     @Query("SELECT episodeKey FROM episodes")
     suspend fun getAllKeys(): List<String>
 
+    @Query("SELECT episodeKey FROM episodes WHERE hasVideo = 1")
+    suspend fun getKeysWithVideo(): List<String>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(item: EpisodeEntity)
 

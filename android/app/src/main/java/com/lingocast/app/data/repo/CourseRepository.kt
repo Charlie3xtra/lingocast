@@ -22,6 +22,10 @@ class CourseRepository(
     private val json: Json,
     val dictionary: OfflineDictionary
 ) {
+    private val bundleCache = object : LinkedHashMap<String, EpisodeBundleJson>(6, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, EpisodeBundleJson>?): Boolean = size > 4
+    }
+
     fun observeSeries(): Flow<List<SeriesEntity>> = db.seriesDao().observeAll()
     fun observeSeriesById(seriesId: String): Flow<SeriesEntity?> = db.seriesDao().observeById(seriesId)
     fun observeAllEpisodes(): Flow<List<EpisodeEntity>> = db.episodeDao().observeAll()
@@ -33,9 +37,18 @@ class CourseRepository(
 
     suspend fun getEpisode(episodeKey: String): EpisodeEntity? = db.episodeDao().getByKey(episodeKey)
 
-    suspend fun loadEpisodeBundle(episode: EpisodeEntity): EpisodeBundleJson = withContext(Dispatchers.IO) {
-        val text = File(episode.episodeJsonPath).readText()
-        json.decodeFromString<EpisodeBundleJson>(text)
+    suspend fun loadEpisodeBundle(episode: EpisodeEntity): EpisodeBundleJson {
+        synchronized(bundleCache) {
+            bundleCache[episode.episodeKey]?.let { return it }
+        }
+        return withContext(Dispatchers.IO) {
+            val text = File(episode.episodeJsonPath).readText()
+            val parsed = json.decodeFromString<EpisodeBundleJson>(text)
+            synchronized(bundleCache) {
+                bundleCache[episode.episodeKey] = parsed
+            }
+            parsed
+        }
     }
 
     suspend fun updatePlaybackProgress(

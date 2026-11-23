@@ -23,7 +23,37 @@ data class CatalogSeriesSummary(
     val manifestPath: String = "",
     val episodeCount: Int = 0,
     val totalDurationMs: Long = 0L,
+    val audioTotalBytes: Long = 0L,
+    val videoTotalBytes: Long = 0L,
     val lcpFile: String? = null
+)
+
+@Serializable
+data class SubscriptionFeedJson(
+    val protocol: String = "lingocast-feed",
+    val protocolVersion: Int = 1,
+    val feedId: String = "",
+    val title: String = "",
+    val description: String = "",
+    val updatedAt: String = "",
+    val requiresAuth: Boolean = false,
+    val totalSeries: Int = 0,
+    val totalEpisodes: Int = 0,
+    val totalDurationMs: Long = 0L,
+    val totalAudioBytes: Long = 0L,
+    val totalVideoBytes: Long = 0L,
+    val series: List<CatalogSeriesSummary> = emptyList()
+)
+
+@Serializable
+data class SavedSubscription(
+    val id: String,
+    val name: String,
+    val url: String,
+    val token: String = "",
+    val lastSyncedAt: Long = 0L,
+    val lastEpisodeCount: Int = 0,
+    val lastSeriesCount: Int = 0
 )
 
 @Serializable

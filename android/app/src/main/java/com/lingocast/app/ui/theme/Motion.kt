@@ -1,8 +1,12 @@
 package com.lingocast.app.ui.theme
 
+import androidx.compose.animation.BoundsTransform
+import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.dp
 
 /**
  * Material 3 Expressive physics-based motion tokens.
@@ -39,4 +43,11 @@ object LingoMotion {
         dampingRatio = 0.78f,
         stiffness = 380f
     )
+
+    val SeriesCoverCornerShape = RoundedCornerShape(22.dp)
+
+    @OptIn(ExperimentalSharedTransitionApi::class)
+    val SeriesCoverBoundsTransform = BoundsTransform { _, _ ->
+        spatialDefault()
+    }
 }

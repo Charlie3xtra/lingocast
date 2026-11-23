@@ -1,0 +1,14 @@
+services:
+  lingocast-feed:
+    build: .
+    container_name: lingocast-feed
+    restart: unless-stopped
+    ports:
+      - "8765:8765"
+    environment:
+      - LINGOCAST_PACKS_DIR=/data/packs
+      - LINGOCAST_PORT=8765
+      - LINGOCAST_TITLE=LingoCast 英语精听课程订阅
+      # - LINGOCAST_TOKEN=optional-secret-token
+    volumes:
+      - /opt/lingocast/packs:/data/packs:ro

@@ -11,15 +11,18 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.CloudDownload
+import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.Palette
+import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.RssFeed
 import androidx.compose.material.icons.rounded.Usb
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
@@ -27,6 +30,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -48,6 +52,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -56,6 +61,7 @@ import com.lingocast.app.data.importexport.RemoteCatalogState
 import com.lingocast.app.data.importexport.SyncProgress
 import com.lingocast.app.data.model.CatalogSeriesSummary
 import com.lingocast.app.data.model.EpisodeSummaryJson
+import com.lingocast.app.data.model.SavedSubscription
 import com.lingocast.app.data.prefs.SubtitleDisplayMode
 import com.lingocast.app.data.prefs.TtsAccent
 import com.lingocast.app.ui.theme.ThemeModePreference
@@ -69,12 +75,59 @@ fun ImportCenterScreen(
     val prefs by container.preferences.state.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
 
-    var hostInput by remember(prefs.lastSyncHost) { mutableStateOf(prefs.lastSyncHost) }
+    var feedUrlInput by remember(prefs.lastSyncHost) { mutableStateOf(prefs.lastSyncHost) }
+    var feedTokenInput by remember { mutableStateOf("") }
     var includeVideo by remember { mutableStateOf(true) }
     var remoteCatalog by remember { mutableStateOf<RemoteCatalogState?>(null) }
     val selectedKeys = remember { mutableStateMapOf<String, Boolean>() }
     var syncProgress by remember { mutableStateOf(SyncProgress()) }
     var statusMessage by remember { mutableStateOf<String?>(null) }
+
+    fun loadSubscription(url: String, token: String) {
+        val trimmedUrl = url.trim()
+        if (trimmedUrl.isEmpty()) {
+            statusMessage = "请先填写课程订阅地址（例如 https://courses.example.com/feed.json）。"
+            return
+        }
+        scope.launch {
+            statusMessage = "正在拉取订阅源目录..."
+            runCatching {
+                container.importer.fetchSubscriptionFeed(
+                    rawUrl = trimmedUrl,
+                    authToken = token.takeIf { it.isNotBlank() }
+                )
+            }.onSuccess { remote ->
+                remoteCatalog = remote
+                feedUrlInput = remote.baseUrl
+                container.preferences.setLastSyncHost(remote.baseUrl)
+                val subId = remote.feedId.ifBlank { remote.baseUrl }
+                val subName = remote.feedTitle.ifBlank {
+                    remote.baseUrl.removePrefix("https://").removePrefix("http://")
+                }
+                container.preferences.saveSubscription(
+                    SavedSubscription(
+                        id = subId,
+                        name = subName,
+                        url = remote.baseUrl,
+                        token = token.trim(),
+                        lastSyncedAt = System.currentTimeMillis(),
+                        lastEpisodeCount = remote.catalog.totalEpisodes,
+                        lastSeriesCount = remote.catalog.series.size
+                    )
+                )
+                selectedKeys.clear()
+                remote.manifests.forEach { (sid, mf) ->
+                    mf.episodes.forEach { ep ->
+                        val key = "$sid/${ep.episodeId}"
+                        selectedKeys[key] = !isEpisodeSatisfied(key, ep.hasVideo, includeVideo, remote)
+                    }
+                }
+                statusMessage = "已连接订阅「$subName」：共 ${remote.catalog.series.size} 个专辑、${remote.catalog.totalEpisodes} 集。"
+            }.onFailure { err ->
+                statusMessage = "订阅加载失败：${err.message}"
+            }
+        }
+    }
 
     val openLcpLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
@@ -130,7 +183,7 @@ fun ImportCenterScreen(
             }
         }
 
-        // Section 1: LAN Wi-Fi Sync
+        // Section 1: Subscription Feeds Management
         item {
             Surface(
                 color = MaterialTheme.colorScheme.surfaceContainerLow,
@@ -139,19 +192,28 @@ fun ImportCenterScreen(
             ) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Icon(Icons.Rounded.CloudDownload, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                        Text("局域网 Wi-Fi 高速同步", style = MaterialTheme.typography.titleMedium)
+                        Icon(Icons.Rounded.RssFeed, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                        Text("课程订阅源管理", style = MaterialTheme.typography.titleMedium)
                     }
                     Text(
-                        text = "在电脑运行 `lingocast serve --port 8765` 后，输入终端显示的局域网地址即可同步全部 56 集或后续新增视频课程。",
+                        text = "粘贴自建服务器或局域网发布的订阅地址（支持 HTTPS 公网域名与局域网 IP），可按需选择仅下音频或高清视频。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     OutlinedTextField(
-                        value = hostInput,
-                        onValueChange = { hostInput = it },
-                        label = { Text("电脑服务地址 (如 192.168.31.100:8765)") },
+                        value = feedUrlInput,
+                        onValueChange = { feedUrlInput = it },
+                        label = { Text("订阅地址 (如 https://courses.example.com/feed.json)") },
                         singleLine = true,
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = feedTokenInput,
+                        onValueChange = { feedTokenInput = it },
+                        label = { Text("访问口令（可选，公开订阅留空）") },
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
                         shape = RoundedCornerShape(16.dp),
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -160,39 +222,72 @@ fun ImportCenterScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Text("同步高清视频画面（取消则仅传音频省空间）", style = MaterialTheme.typography.bodySmall)
+                        Text("同步高清视频画面（关闭则仅下音频省空间）", style = MaterialTheme.typography.bodySmall)
                         Switch(checked = includeVideo, onCheckedChange = { includeVideo = it })
                     }
                     Button(
-                        onClick = {
-                            container.preferences.setLastSyncHost(hostInput)
-                            scope.launch {
-                                statusMessage = "正在连接 $hostInput..."
-                                runCatching { container.importer.fetchRemoteCatalog(hostInput) }
-                                    .onSuccess { remote ->
-                                        remoteCatalog = remote
-                                        selectedKeys.clear()
-                                        remote.manifests.forEach { (sid, mf) ->
-                                            mf.episodes.forEach { ep ->
-                                                val key = "$sid/${ep.episodeId}"
-                                                selectedKeys[key] = key !in remote.installedKeys
-                                            }
-                                        }
-                                        statusMessage = "已连接：共 ${remote.catalog.totalEpisodes} 集可同步。"
-                                    }
-                                    .onFailure { err -> statusMessage = "连接失败：${err.message}" }
-                            }
-                        },
+                        onClick = { loadSubscription(feedUrlInput, feedTokenInput) },
                         modifier = Modifier.fillMaxWidth().height(48.dp),
                         shape = RoundedCornerShape(16.dp)
                     ) {
-                        Text("获取电脑课程目录")
+                        Text("添加并获取订阅目录")
+                    }
+
+                    if (prefs.subscriptions.isNotEmpty()) {
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                        Text("已保存订阅源 (${prefs.subscriptions.size})", style = MaterialTheme.typography.labelLarge)
+                        prefs.subscriptions.forEach { sub ->
+                            Surface(
+                                color = MaterialTheme.colorScheme.surfaceContainer,
+                                shape = RoundedCornerShape(14.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = sub.name,
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.SemiBold,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            text = "${sub.url} · ${sub.lastSeriesCount} 专辑 / ${sub.lastEpisodeCount} 集",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                    FilledTonalButton(
+                                        onClick = {
+                                            feedUrlInput = sub.url
+                                            feedTokenInput = sub.token
+                                            loadSubscription(sub.url, sub.token)
+                                        },
+                                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                        shape = RoundedCornerShape(12.dp)
+                                    ) {
+                                        Icon(Icons.Rounded.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(Modifier.width(4.dp))
+                                        Text("刷新", style = MaterialTheme.typography.labelMedium)
+                                    }
+                                    IconButton(onClick = { container.preferences.removeSubscription(sub.id) }) {
+                                        Icon(Icons.Rounded.DeleteOutline, contentDescription = "删除订阅")
+                                    }
+                                }
+                            }
+                        }
                     }
 
                     if (syncProgress.isRunning) {
                         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Text(
-                                text = "${syncProgress.currentTitle} (${syncProgress.completedCount}/${syncProgress.totalCount})",
+                                text = "${syncProgress.currentTitle} (${syncProgress.completedCount}/${syncProgress.totalCount}) · ${syncProgress.message}",
                                 style = MaterialTheme.typography.labelMedium
                             )
                             LinearProgressIndicator(
@@ -212,37 +307,60 @@ fun ImportCenterScreen(
         remoteCatalog?.let { remote ->
             item {
                 val allPairs = buildSelectedPairs(remote, selectedKeys)
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("可同步剧集 (${allPairs.size} 已选)", style = MaterialTheme.typography.titleMedium)
-                    Row {
-                        TextButton(onClick = {
-                            selectedKeys.keys.forEach { k -> selectedKeys[k] = k !in remote.installedKeys }
-                        }) { Text("仅选未同步") }
-                        Button(
-                            enabled = allPairs.isNotEmpty() && !syncProgress.isRunning,
-                            onClick = {
-                                scope.launch {
-                                    runCatching {
-                                        container.importer.syncEpisodesFromServer(
-                                            remote = remote,
-                                            selectedEpisodes = allPairs,
-                                            includeVideo = includeVideo,
-                                            onProgress = { p -> syncProgress = p }
-                                        )
-                                    }.onSuccess { cnt ->
-                                        statusMessage = "Wi-Fi 同步完成，共更新 $cnt 集！"
-                                        remoteCatalog = container.importer.fetchRemoteCatalog(hostInput)
-                                    }.onFailure { err ->
-                                        syncProgress = SyncProgress()
-                                        statusMessage = "同步中断：${err.message}"
+                val estimatedMb = allPairs.sumOf { (_, ep) ->
+                    val videoPart = if (includeVideo && ep.hasVideo) ep.videoSizeBytes else 0L
+                    videoPart + ep.audioSizeBytes
+                } / (1024L * 1024L)
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "可同步剧集 (${allPairs.size} 已选 · 约 ${estimatedMb} MB)",
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                            if (remote.updatedAt.isNotBlank()) {
+                                Text(
+                                    text = "订阅更新时间：${remote.updatedAt}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        Row {
+                            TextButton(onClick = {
+                                remote.manifests.forEach { (sid, mf) ->
+                                    mf.episodes.forEach { ep ->
+                                        val k = "$sid/${ep.episodeId}"
+                                        selectedKeys[k] = !isEpisodeSatisfied(k, ep.hasVideo, includeVideo, remote)
                                     }
                                 }
-                            }
-                        ) { Text("开始同步") }
+                            }) { Text("仅选缺失") }
+                            Button(
+                                enabled = allPairs.isNotEmpty() && !syncProgress.isRunning,
+                                onClick = {
+                                    scope.launch {
+                                        runCatching {
+                                            container.importer.syncEpisodesFromServer(
+                                                remote = remote,
+                                                selectedEpisodes = allPairs,
+                                                includeVideo = includeVideo,
+                                                onProgress = { p -> syncProgress = p }
+                                            )
+                                        }.onSuccess { cnt ->
+                                            statusMessage = "订阅同步完成，共更新 $cnt 集！"
+                                            loadSubscription(remote.baseUrl, remote.authToken.orEmpty())
+                                        }.onFailure { err ->
+                                            syncProgress = SyncProgress()
+                                            statusMessage = "同步中断：${err.message}"
+                                        }
+                                    }
+                                }
+                            ) { Text("开始同步") }
+                        }
                     }
                 }
             }
@@ -251,15 +369,38 @@ fun ImportCenterScreen(
                 val mf = remote.manifests[series.seriesId]
                 if (mf != null) {
                     item(key = "remote_hdr_${series.seriesId}") {
-                        Text(
-                            text = "${series.titleZh} (${mf.episodes.size} 集)",
-                            style = MaterialTheme.typography.titleSmall,
-                            color = MaterialTheme.colorScheme.primary
-                        )
+                        val allSeriesSelected = mf.episodes.all { ep ->
+                            selectedKeys["${series.seriesId}/${ep.episodeId}"] == true
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "${series.titleZh} (${mf.episodes.size} 集)",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            TextButton(onClick = {
+                                val nextState = !allSeriesSelected
+                                mf.episodes.forEach { ep ->
+                                    selectedKeys["${series.seriesId}/${ep.episodeId}"] = nextState
+                                }
+                            }) {
+                                Text(if (allSeriesSelected) "取消全选" else "全选本专辑")
+                            }
+                        }
                     }
                     items(mf.episodes, key = { "${series.seriesId}/${it.episodeId}" }) { ep ->
                         val k = "${series.seriesId}/${ep.episodeId}"
                         val isInstalled = k in remote.installedKeys
+                        val hasLocalVideo = k in remote.installedVideoKeys
+                        val statusTag = when {
+                            isInstalled && hasLocalVideo -> " · 已下载(含视频)"
+                            isInstalled -> " · 已下载(仅音频)"
+                            else -> ""
+                        }
                         Surface(
                             color = MaterialTheme.colorScheme.surfaceContainerLowest,
                             shape = RoundedCornerShape(14.dp),
@@ -281,8 +422,7 @@ fun ImportCenterScreen(
                                         overflow = TextOverflow.Ellipsis
                                     )
                                     Text(
-                                        text = "${ep.cefrLevel} · ${(ep.videoSizeBytes / 1024 / 1024)}MB 视频 / ${(ep.audioSizeBytes / 1024 / 1024)}MB 音频" +
-                                            if (isInstalled) " · 已在手机中" else "",
+                                        text = "${ep.cefrLevel} · ${(ep.videoSizeBytes / 1024 / 1024)}MB 视频 / ${(ep.audioSizeBytes / 1024 / 1024)}MB 音频$statusTag",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
@@ -419,8 +559,10 @@ fun ImportCenterScreen(
                     Text(
                         text = "1. 将新视频/链接交给电脑端 LingoCast 流水线或任意 AI Agent：\n" +
                             "   lingocast ingest -s <视频目录或URL> --series <专辑名>\n" +
-                            "2. 启动同步服务并在此页一键拉取：\n" +
-                            "   lingocast serve --port 8765",
+                            "2. 在自建服务器或电脑运行订阅服务端：\n" +
+                            "   python3 server/lingocast_server.py --packs-dir ./packs --port 8765\n" +
+                            "   （或在电脑端执行 lingocast serve --port 8765）\n" +
+                            "3. 将服务地址（如 https://courses.example.com/feed.json）添加至上方订阅源即可更新。",
                         style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -428,6 +570,17 @@ fun ImportCenterScreen(
             }
         }
     }
+}
+
+private fun isEpisodeSatisfied(
+    episodeKey: String,
+    epHasVideo: Boolean,
+    includeVideo: Boolean,
+    remote: RemoteCatalogState
+): Boolean = if (includeVideo && epHasVideo) {
+    episodeKey in remote.installedVideoKeys
+} else {
+    episodeKey in remote.installedKeys
 }
 
 private fun buildSelectedPairs(

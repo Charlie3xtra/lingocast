@@ -19,26 +19,32 @@
 
 ## 二、Android 端安装与功能亮点
 
-- **安装包下载**：前往 [GitHub Releases](https://github.com/Charlie3xtra/lingocast/releases) 下载 `LingoCast-debug.apk`（Android 8.0+ / API 26+；构建 APK 时可内置离线 ECDICT 词库与精选体验包，仓库源码本身已忽略大型离线词库、课程媒体包与构建产物）。
+- **安装包下载**：前往 [GitHub Releases](https://github.com/Charlie3xtra/lingocast/releases) 下载 `LingoCast-debug.apk`（`v1.1.0`，Android 8.0+ / API 26+；构建 APK 时可内置离线 ECDICT 词库与精选体验包，仓库源码本身已忽略大型离线词库、课程媒体包与构建产物）。
 - **核心学习功能**：
-  1. **音视频无缝切换 + 细轨进度条（`SlimTimelineBar`）**：支持基于 `TextureView` 的 16:9 嵌入式原画视频播放（双击 ±5 秒、全屏）与一键切换极简纯音频卡片，并支持后台/锁屏/线控播放。
-  2. **词级卡拉 OK 双语字幕**：播放时逐词实时高亮跟踪并自动居中滚动（仅手动拖拽字幕列表时暂停跟随）；支持「中英双语 / 仅英文 / 仅中文 / 盲听模式（点击揭晓）」。
+  1. **音视频无缝切换 + Material 3 蛇形进度条（`WavyMediaProgressBar`）**：支持基于 `TextureView` 的 16:9 嵌入式原画视频播放（进入零掉帧、封面无缝承接、双击 ±5 秒、全屏）与极简纯音频卡片切换；进度条在播放时呈 M3 Expressive 动态流动波浪，暂停或手指拖动时平滑展平并支持毫秒级实时预览。
+  2. **词级卡拉 OK 双语字幕 + 一键切换中文翻译**：播放时逐词实时高亮跟踪并自动居中滚动（仅手动拖拽字幕列表时暂停跟随）；字幕区顶部提供显眼的 **`中文翻译`** 胶囊开关以平滑展开/收起中文译文，同时兼容「中英双语 / 仅英文 / 仅中文 / 盲听模式」。
   3. **随时间轴动态变化的实时词栏与学习抽屉**：竖屏播放器采用单行紧致 `CompactTimelineVocabBar` 随时间轴切换当前句词汇提示，并将全集「词汇 / 精讲」标签页收纳进底部工作表 `StudyResourcesSheet`，最大化字幕阅读视口（平板/折叠屏横屏保留双栏直出与 `TimelineVocabStrip`）。
   4. **零延迟即点即查 + 原声语境生词本**：点击字幕中任意英文单词自动暂停并弹出释义卡片（音标、TTS 英/美发音、考纲标签、牛津/柯林斯星级、本句语境释义），一键收藏后自动关联原视频片段，在 **SM-2 记忆闪卡** 中可直接「回听原声语境」。
   5. **精听训练工具箱**：`0.6x–2.0x` 无变调变速、单句循环、A-B 区间复读、跟读录音对比、挖空拼写听写、全库字幕/词汇检索直达播放。
-  6. **严格 Material 3 Expressive 规范**：Material You 动态取色、明暗主题切换、高圆角容器、物理弹簧动效、共享元素转场、Android 17 预测性返回（Predictive Back）手势缩放适配，以及基于 `WindowSizeClass` 的手机单栏/平板折叠屏双栏自适应布局。
+  6. **严格 Material 3 Expressive 规范**：Material You 动态取色、明暗主题切换、同心圆角共享元素转场（专辑封面切换全程保持 `22.dp` 圆角不畸变）、物理弹簧动效、Android 17 预测性返回（Predictive Back）手势缩放适配，以及基于 `WindowSizeClass` 的手机单栏/平板折叠屏双栏自适应布局。
 
 ---
 
-## 三、如何把全套 56 集（或后续新视频）同步到手机
+## 三、如何通过课程订阅源或本地工具同步课程到手机
 
-### 方式 A：局域网 Wi-Fi 无线同步（最推荐）
-1. 确保手机与电脑处于同一 Wi-Fi 下，在电脑运行：
+### 方式 A：课程订阅源（推荐，支持公网域名与局域网自建服务）
+1. 在个人服务器或 NAS 部署零依赖订阅后端 [lingocast_server.py](server/lingocast_server.py)（支持 Cloudflare Tunnel / 反向代理暴露 HTTPS、可选 Bearer 口令鉴权、目录热扫描及 HTTP `206 Range` 断点续传，协议见 [PROTOCOL.md](server/PROTOCOL.md)）：
+   ```bash
+   python3 server/lingocast_server.py --packs-dir /opt/lingocast/packs --host 0.0.0.0 --port 8765
+   ```
+   也可在电脑端一键启动同一套订阅协议服务：
    ```powershell
    D:\ccproject\lingocast\.toolchain\venv\Scripts\python.exe -m lingocast.cli serve --port 8765
    ```
-2. 终端会打印出电脑局域网地址（例如 `http://192.168.31.xxx:8765`）。
-3. 打开手机端 **LingoCast → 导入** 页，输入该地址点击 **获取电脑课程目录**，可勾选任意集数及是否同步高清视频画面（取消勾选视频可仅传轻量音频以节省手机空间），点击 **开始同步** 即可。
+2. 将服务端暴露的订阅地址（例如 `https://courses.example.com/feed.json` 或局域网地址）分享给手机端。
+3. 打开手机端 **LingoCast → 导入 → 课程订阅源管理**，粘贴订阅地址（可选填写访问口令）并点击 **添加并获取订阅目录**：
+   - App 内不硬编码任何固定服务器域名，可同时管理、刷新和删除多个订阅源；
+   - 支持切换「同步高清视频画面 / 仅下载轻量音频（省空间）」，自动计算预计下载体积，支持「全选本专辑」「仅选缺失」及断点续传。
 
 ### 方式 B：USB ADB 高速推送
 手机连接电脑并开启 USB 调试后运行：
@@ -74,5 +80,6 @@ $py = 'D:\ccproject\lingocast\.toolchain\venv\Scripts\python.exe'
 所有依赖、Android SDK、Gradle 缓存、Python 虚拟环境及模型缓存均严格隔离在本地 `.toolchain/` 中，不占用系统盘空间（仓库已默认忽略 `.toolchain/`、`data/`、`dist/` 与大型二进制资产）：
 - [android/](android/) — 原生 Kotlin / Jetpack Compose Android 工程
 - [pipeline/](pipeline/) — Python 处理管线、JSON Schema、Unit Tests 与构建脚本
+- [server/](server/) — 零依赖 LingoCast Subscription Feed v1 后端与 Docker / systemd 部署模板
 - `data/packs/`（gitignored）— 本地生成的成品课程包目录
 - `dist/LingoCast-debug.apk`（gitignored）— 本地编译或从 [GitHub Releases](https://github.com/Charlie3xtra/lingocast/releases) 获取的可安装 APK

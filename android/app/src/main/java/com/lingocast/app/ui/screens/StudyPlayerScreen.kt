@@ -85,8 +85,8 @@ import com.lingocast.app.data.model.SentenceJson
 import com.lingocast.app.data.prefs.SubtitleDisplayMode
 import com.lingocast.app.playback.ActiveTimelineEntry
 import com.lingocast.app.ui.common.CefrBadge
-import com.lingocast.app.ui.common.SlimTimelineBar
 import com.lingocast.app.ui.common.TimestampText
+import com.lingocast.app.ui.common.WavyMediaProgressBar
 import com.lingocast.app.ui.common.WordLookupSheet
 import com.lingocast.app.ui.theme.LingoMotion
 import kotlinx.coroutines.delay
@@ -127,8 +127,23 @@ fun StudyPlayerScreen(
     var showSubMenu by remember { mutableStateOf(false) }
     var resourcesSheetInitialTab by remember { mutableStateOf<Int?>(null) }
 
-    val listState = rememberLazyListState()
+    val initialSentenceIdx = remember(episodeKey) {
+        if (playbackState.episode?.episodeKey == episodeKey) {
+            playbackState.activeSentenceIndex.coerceAtLeast(0)
+        } else {
+            0
+        }
+    }
+    val listState = rememberLazyListState(initialFirstVisibleItemIndex = initialSentenceIdx)
     var autoFollow by remember { mutableStateOf(true) }
+    var hasInitialPositioned by remember(episodeKey) { mutableStateOf(false) }
+
+    // Defer heavy TextureView inflation until the push transition animation settles
+    var mountVideoSurface by remember(episodeKey) { mutableStateOf(false) }
+    LaunchedEffect(episodeKey) {
+        delay(280L)
+        mountVideoSurface = true
+    }
 
     // Only pause auto-follow when the user explicitly drags the subtitle list
     LaunchedEffect(listState) {
@@ -139,12 +154,17 @@ fun StudyPlayerScreen(
         }
     }
 
-    LaunchedEffect(playbackState.activeSentenceIndex, autoFollow, playbackState.bundle) {
+    LaunchedEffect(playbackState.activeSentenceIndex, autoFollow, playbackState.bundle, playbackState.episode?.episodeKey) {
         val idx = playbackState.activeSentenceIndex
-        if (autoFollow && idx >= 0 && playbackState.bundle != null) {
+        if (autoFollow && idx >= 0 && playbackState.bundle != null && playbackState.episode?.episodeKey == episodeKey) {
             val vh = listState.layoutInfo.viewportSize.height
             val offsetPx = if (vh > 0) -(vh * 0.16f).toInt() else -72
-            listState.animateScrollToItem(index = idx, scrollOffset = offsetPx)
+            if (!hasInitialPositioned) {
+                listState.scrollToItem(index = idx, scrollOffset = offsetPx)
+                hasInitialPositioned = true
+            } else {
+                listState.animateScrollToItem(index = idx, scrollOffset = offsetPx)
+            }
         }
     }
 
@@ -234,7 +254,7 @@ fun StudyPlayerScreen(
             )
         }
     ) { innerPadding ->
-        if (playbackState.isLoading || playbackState.bundle == null) {
+        if (playbackState.isLoading || playbackState.bundle == null || playbackState.episode?.episodeKey != episodeKey) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -269,6 +289,8 @@ fun StudyPlayerScreen(
                 ) { showVideo ->
                     if (showVideo) {
                         VideoPlayerCard(
+                            coverPath = episode.coverPath,
+                            mountSurface = mountVideoSurface,
                             controller = controller,
                             onDoubleTapSeek = { controller.seekRelative(it) },
                             onFullscreen = { showFullscreenVideo = true }
@@ -284,36 +306,18 @@ fun StudyPlayerScreen(
                     }
                 }
 
-                // Slim Timeline Bar + Compact Timestamps
-                Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
-                    SlimTimelineBar(
-                        positionMs = playbackState.positionMs,
-                        durationMs = playbackState.durationMs,
-                        loopAMs = playbackState.loopAMs,
-                        loopBMs = playbackState.loopBMs,
-                        onSeek = { ms ->
-                            autoFollow = true
-                            controller.seekTo(ms)
-                        }
-                    )
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 4.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        TimestampText(playbackState.positionMs)
-                        Text(
-                            text = if (playbackState.activeSentenceIndex >= 0) {
-                                "句 ${playbackState.activeSentenceIndex + 1} / ${bundle.sentences.size}"
-                            } else "",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        TimestampText(playbackState.durationMs)
+                // Material 3 Expressive Wavy Media Progress Bar + Isolated 20Hz Timestamp Section
+                PlaybackProgressSection(
+                    controller = controller,
+                    durationMs = playbackState.durationMs,
+                    isPlaying = playbackState.isPlaying,
+                    loopAMs = playbackState.loopAMs,
+                    loopBMs = playbackState.loopBMs,
+                    onSeek = { ms ->
+                        autoFollow = true
+                        controller.seekTo(ms)
                     }
-                }
+                )
 
                 // Compact 1-line timeline vocab bar on phones; full card strip on wide 2-pane tablets
                 if (isTwoPane) {
@@ -363,6 +367,7 @@ fun StudyPlayerScreen(
                         scope.launch { listState.animateScrollToItem(index = idx, scrollOffset = offsetPx) }
                     }
                 },
+                onToggleChineseTranslation = { controller.toggleChineseTranslation() },
                 onSentenceClick = { sent ->
                     autoFollow = true
                     controller.seekTo(sent.startMs)
@@ -667,14 +672,61 @@ fun StudyPlayerScreen(
     }
 }
 
+@Composable
+private fun PlaybackProgressSection(
+    controller: com.lingocast.app.playback.PlayerController,
+    durationMs: Long,
+    isPlaying: Boolean,
+    loopAMs: Long?,
+    loopBMs: Long?,
+    onSeek: (Long) -> Unit
+) {
+    val livePosMs by controller.positionMs.collectAsStateWithLifecycle()
+    var scrubPosMs by remember { mutableStateOf<Long?>(null) }
+
+    Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+        WavyMediaProgressBar(
+            positionMs = livePosMs,
+            durationMs = durationMs,
+            isPlaying = isPlaying,
+            loopAMs = loopAMs,
+            loopBMs = loopBMs,
+            onScrubbingPositionChange = { scrubPosMs = it },
+            onSeek = onSeek
+        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 4.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            TimestampText(scrubPosMs ?: livePosMs)
+            if (scrubPosMs != null) {
+                Text(
+                    text = "拖动定位",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+            TimestampText(durationMs)
+        }
+    }
+}
+
 @androidx.annotation.OptIn(UnstableApi::class)
 @Composable
 private fun VideoPlayerCard(
+    coverPath: String,
+    mountSurface: Boolean,
     controller: com.lingocast.app.playback.PlayerController,
     onDoubleTapSeek: (Long) -> Unit,
     onFullscreen: () -> Unit
 ) {
     var seekHint by remember { mutableStateOf<String?>(null) }
+    val hasCover = remember(coverPath) {
+        coverPath.isNotBlank() && File(coverPath).isFile()
+    }
     LaunchedEffect(seekHint) {
         if (seekHint != null) {
             delay(750)
@@ -689,40 +741,50 @@ private fun VideoPlayerCard(
             .clip(RoundedCornerShape(22.dp))
             .background(Color.Black)
     ) {
-        AndroidView(
-            factory = { ctx ->
-                (LayoutInflater.from(ctx).inflate(R.layout.view_lingo_player, null, false) as PlayerView).apply {
-                    layoutParams = ViewGroup.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.MATCH_PARENT
-                    )
-                    player = controller.getOrCreateExoPlayer()
-                }
-            },
-            update = { view ->
-                val expected = controller.getOrCreateExoPlayer()
-                if (view.player !== expected) {
-                    view.player = expected
-                }
-            },
-            onRelease = { view -> view.player = null },
-            modifier = Modifier
-                .fillMaxSize()
-                .pointerInput(Unit) {
-                    detectTapGestures(
-                        onTap = { controller.togglePlayPause() },
-                        onDoubleTap = { offset ->
-                            if (offset.x < size.width / 2f) {
-                                onDoubleTapSeek(-5000L)
-                                seekHint = "-5 秒"
-                            } else {
-                                onDoubleTapSeek(5000L)
-                                seekHint = "+5 秒"
+        if (hasCover) {
+            AsyncImage(
+                model = File(coverPath),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
+        if (mountSurface) {
+            AndroidView(
+                factory = { ctx ->
+                    (LayoutInflater.from(ctx).inflate(R.layout.view_lingo_player, null, false) as PlayerView).apply {
+                        layoutParams = ViewGroup.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.MATCH_PARENT
+                        )
+                        player = controller.getOrCreateExoPlayer()
+                    }
+                },
+                update = { view ->
+                    val expected = controller.getOrCreateExoPlayer()
+                    if (view.player !== expected) {
+                        view.player = expected
+                    }
+                },
+                onRelease = { view -> view.player = null },
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInput(Unit) {
+                        detectTapGestures(
+                            onTap = { controller.togglePlayPause() },
+                            onDoubleTap = { offset ->
+                                if (offset.x < size.width / 2f) {
+                                    onDoubleTapSeek(-5000L)
+                                    seekHint = "-5 秒"
+                                } else {
+                                    onDoubleTapSeek(5000L)
+                                    seekHint = "+5 秒"
+                                }
                             }
-                        }
-                    )
-                }
-        )
+                        )
+                    }
+            )
+        }
 
         AnimatedVisibility(
             visible = seekHint != null,
@@ -775,6 +837,9 @@ private fun AudioOnlyHeroCard(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            val hasCover = remember(coverPath) {
+                coverPath.isNotBlank() && File(coverPath).isFile()
+            }
             Box(
                 modifier = Modifier
                     .size(width = 78.dp, height = 54.dp)
@@ -782,7 +847,7 @@ private fun AudioOnlyHeroCard(
                     .background(MaterialTheme.colorScheme.primaryContainer),
                 contentAlignment = Alignment.Center
             ) {
-                if (coverPath.isNotBlank() && File(coverPath).isFile()) {
+                if (hasCover) {
                     AsyncImage(
                         model = File(coverPath),
                         contentDescription = null,

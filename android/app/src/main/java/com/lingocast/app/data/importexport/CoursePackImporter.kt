@@ -13,12 +13,13 @@ import com.lingocast.app.data.model.CatalogSeriesSummary
 import com.lingocast.app.data.model.EpisodeBundleJson
 import com.lingocast.app.data.model.EpisodeSummaryJson
 import com.lingocast.app.data.model.SeriesManifestJson
+import com.lingocast.app.data.model.SubscriptionFeedJson
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import java.io.BufferedInputStream
 import java.io.File
-import java.io.InputStream
+import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.zip.ZipInputStream
@@ -33,10 +34,47 @@ data class SyncProgress(
 
 data class RemoteCatalogState(
     val baseUrl: String,
+    val feedId: String = "",
+    val feedTitle: String = "",
+    val feedDescription: String = "",
+    val updatedAt: String = "",
+    val authToken: String? = null,
     val catalog: CatalogJson,
     val manifests: Map<String, SeriesManifestJson>,
-    val installedKeys: Set<String>
+    val installedKeys: Set<String>,
+    val installedVideoKeys: Set<String> = emptySet()
 )
+
+object SubscriptionUrlNormalizer {
+    private val FEED_SUFFIX_REGEX = Regex("/(api/v1/feed\\.json|feed\\.json|subscribe\\.json|catalog\\.json)$", RegexOption.IGNORE_CASE)
+    private val SCHEME_REGEX = Regex("^https?://", RegexOption.IGNORE_CASE)
+
+    fun normalizeBaseUrl(raw: String): String {
+        var cleaned = raw.trim().trimEnd('/')
+        if (cleaned.isEmpty()) return ""
+        if (!SCHEME_REGEX.containsMatchIn(cleaned)) {
+            val hostPart = cleaned.substringBefore('/').substringBefore(':')
+            val isLocalOrIp = isLocalOrPrivateHost(hostPart)
+            val explicitPort = cleaned.substringBefore('/').substringAfter(':', "").toIntOrNull()
+            val useHttp = isLocalOrIp || (explicitPort != null && explicitPort != 443)
+            cleaned = (if (useHttp) "http://" else "https://") + cleaned
+        }
+        cleaned = cleaned.replace(FEED_SUFFIX_REGEX, "").trimEnd('/')
+        return cleaned
+    }
+
+    private fun isLocalOrPrivateHost(host: String): Boolean {
+        val lower = host.lowercase()
+        if (lower == "localhost" || lower.endsWith(".local") || lower.endsWith(".lan")) return true
+        val parts = lower.split('.')
+        if (parts.size == 4 && parts.all { p -> p.toIntOrNull() in 0..255 }) {
+            val a = parts[0].toInt()
+            val b = parts[1].toInt()
+            return a == 10 || a == 127 || (a == 192 && b == 168) || (a == 172 && b in 16..31)
+        }
+        return false
+    }
+}
 
 class CoursePackImporter(
     private val context: Context,
@@ -264,21 +302,77 @@ class CoursePackImporter(
         db.subtitleIndexDao().replaceEpisodeIndex(epKey, indexRows)
     }
 
-    suspend fun fetchRemoteCatalog(rawHostOrUrl: String): RemoteCatalogState = withContext(Dispatchers.IO) {
-        val baseUrl = normalizeBaseUrl(rawHostOrUrl)
-        val catalogText = httpGetText("$baseUrl/catalog.json")
-        val catalog = json.decodeFromString<CatalogJson>(catalogText)
+    private class HttpStatusException(val code: Int, message: String) : IllegalStateException(message)
+
+    suspend fun fetchRemoteCatalog(rawHostOrUrl: String, authToken: String? = null): RemoteCatalogState =
+        fetchSubscriptionFeed(rawHostOrUrl, authToken)
+
+    suspend fun fetchSubscriptionFeed(rawUrl: String, authToken: String? = null): RemoteCatalogState = withContext(Dispatchers.IO) {
+        val baseUrl = SubscriptionUrlNormalizer.normalizeBaseUrl(rawUrl)
+        if (baseUrl.isBlank()) error("请输入有效的订阅地址")
+        val cleanToken = authToken?.trim()?.takeIf { it.isNotEmpty() }
+
+        var feedTitle = ""
+        var feedDescription = ""
+        var feedId = ""
+        var updatedAt = ""
+        var catalog: CatalogJson? = null
+
+        val feedCandidates = listOf("$baseUrl/api/v1/feed.json", "$baseUrl/feed.json")
+        for (feedUrl in feedCandidates) {
+            try {
+                val feedText = httpGetText(feedUrl, cleanToken)
+                val parsed = json.decodeFromString<SubscriptionFeedJson>(feedText)
+                feedId = parsed.feedId
+                feedTitle = parsed.title
+                feedDescription = parsed.description
+                updatedAt = parsed.updatedAt
+                catalog = CatalogJson(
+                    schemaVersion = parsed.protocolVersion,
+                    generatedAt = parsed.updatedAt,
+                    totalEpisodes = parsed.totalEpisodes,
+                    totalDurationMs = parsed.totalDurationMs,
+                    series = parsed.series
+                )
+                break
+            } catch (e: HttpStatusException) {
+                if (e.code == 401 || e.code == 403) {
+                    error("该订阅源需要有效访问口令 (HTTP ${e.code})")
+                }
+            }
+        }
+
+        if (catalog == null) {
+            val catalogText = try {
+                httpGetText("$baseUrl/catalog.json", cleanToken)
+            } catch (e: HttpStatusException) {
+                if (e.code == 401 || e.code == 403) {
+                    error("该订阅源需要有效访问口令 (HTTP ${e.code})")
+                }
+                throw e
+            }
+            catalog = json.decodeFromString<CatalogJson>(catalogText)
+            updatedAt = catalog.generatedAt
+        }
+
         val manifests = LinkedHashMap<String, SeriesManifestJson>()
         for (series in catalog.series) {
-            val manifestText = httpGetText("$baseUrl/${series.manifestPath}")
+            val manifestText = httpGetText("$baseUrl/${series.manifestPath.trimStart('/')}", cleanToken)
             manifests[series.seriesId] = json.decodeFromString(manifestText)
         }
         val installed = db.episodeDao().getAllKeys().toSet()
+        val installedVideos = db.episodeDao().getKeysWithVideo().toSet()
         RemoteCatalogState(
             baseUrl = baseUrl,
+            feedId = feedId,
+            feedTitle = feedTitle,
+            feedDescription = feedDescription,
+            updatedAt = updatedAt,
+            authToken = cleanToken,
             catalog = catalog,
             manifests = manifests,
-            installedKeys = installed
+            installedKeys = installed,
+            installedVideoKeys = installedVideos
         )
     }
 
@@ -322,7 +416,7 @@ class CoursePackImporter(
                         completedCount = synced,
                         totalCount = total,
                         isRunning = true,
-                        message = "正在下载学习数据包..."
+                        message = "正在下载字幕与词汇包..."
                     )
                 )
 
@@ -330,10 +424,23 @@ class CoursePackImporter(
                 val audioDest = File(seriesDir, ep.audioFile)
                 val coverDest = File(seriesDir, ep.coverFile)
 
-                downloadFile("${remote.baseUrl}/$seriesId/${ep.episodeJsonFile}", epJsonDest)
-                downloadFile("${remote.baseUrl}/$seriesId/${ep.audioFile}", audioDest)
+                downloadFile(
+                    urlStr = "${remote.baseUrl}/$seriesId/${ep.episodeJsonFile}",
+                    dest = epJsonDest,
+                    authToken = remote.authToken
+                )
+                downloadFile(
+                    urlStr = "${remote.baseUrl}/$seriesId/${ep.audioFile}",
+                    dest = audioDest,
+                    authToken = remote.authToken,
+                    expectedSizeBytes = ep.audioSizeBytes
+                )
                 runCatching {
-                    downloadFile("${remote.baseUrl}/$seriesId/${ep.coverFile}", coverDest)
+                    downloadFile(
+                        urlStr = "${remote.baseUrl}/$seriesId/${ep.coverFile}",
+                        dest = coverDest,
+                        authToken = remote.authToken
+                    )
                 }
 
                 var videoDest: File? = null
@@ -348,7 +455,12 @@ class CoursePackImporter(
                         )
                     )
                     val targetVid = File(seriesDir, ep.videoFile)
-                    downloadFile("${remote.baseUrl}/$seriesId/${ep.videoFile}", targetVid)
+                    downloadFile(
+                        urlStr = "${remote.baseUrl}/$seriesId/${ep.videoFile}",
+                        dest = targetVid,
+                        authToken = remote.authToken,
+                        expectedSizeBytes = ep.videoSizeBytes
+                    )
                     if (targetVid.isFile) {
                         videoDest = targetVid
                     }
@@ -396,24 +508,19 @@ class CoursePackImporter(
         }
     }
 
-    private fun normalizeBaseUrl(raw: String): String {
-        val trimmed = raw.trim().trimEnd('/')
-        return if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
-            trimmed
-        } else {
-            "http://$trimmed"
-        }
-    }
-
-    private fun httpGetText(urlStr: String): String {
+    private fun httpGetText(urlStr: String, authToken: String? = null): String {
         val conn = (URL(urlStr).openConnection() as HttpURLConnection).apply {
-            connectTimeout = 8000
-            readTimeout = 20000
+            connectTimeout = 10000
+            readTimeout = 25000
+            instanceFollowRedirects = true
+            if (!authToken.isNullOrBlank()) {
+                setRequestProperty("Authorization", "Bearer $authToken")
+            }
         }
         try {
             val code = conn.responseCode
             if (code !in 200..299) {
-                error("HTTP $code 请求失败: $urlStr")
+                throw HttpStatusException(code, "HTTP $code 请求失败: $urlStr")
             }
             return conn.inputStream.bufferedReader().use { it.readText() }
         } finally {
@@ -421,29 +528,57 @@ class CoursePackImporter(
         }
     }
 
-    private fun downloadFile(urlStr: String, dest: File) {
+    private fun downloadFile(
+        urlStr: String,
+        dest: File,
+        authToken: String? = null,
+        expectedSizeBytes: Long = 0L
+    ) {
         dest.parentFile?.mkdirs()
-        val tmp = File(dest.parentFile, "${dest.name}.part")
-        val conn = (URL(urlStr).openConnection() as HttpURLConnection).apply {
-            connectTimeout = 10000
-            readTimeout = 60000
+        if (expectedSizeBytes > 0L && dest.isFile && dest.length() == expectedSizeBytes) {
+            return
         }
-        try {
-            val code = conn.responseCode
-            if (code !in 200..299) {
-                error("HTTP $code 下载失败: $urlStr")
+        val tmp = File(dest.parentFile, "${dest.name}.part")
+        var retriedFresh = false
+        while (true) {
+            val existingPartLen = if (tmp.isFile) tmp.length() else 0L
+            val conn = (URL(urlStr).openConnection() as HttpURLConnection).apply {
+                connectTimeout = 12000
+                readTimeout = 60000
+                instanceFollowRedirects = true
+                if (!authToken.isNullOrBlank()) {
+                    setRequestProperty("Authorization", "Bearer $authToken")
+                }
+                if (existingPartLen > 0L) {
+                    setRequestProperty("Range", "bytes=$existingPartLen-")
+                }
             }
-            val expectedLen = conn.contentLengthLong
-            if (dest.isFile && expectedLen > 0 && dest.length() == expectedLen) {
+            try {
+                val code = conn.responseCode
+                if (code == 416 && existingPartLen > 0L && !retriedFresh) {
+                    tmp.delete()
+                    retriedFresh = true
+                    continue
+                }
+                if (code !in 200..299 && code != HttpURLConnection.HTTP_PARTIAL) {
+                    throw HttpStatusException(code, "HTTP $code 下载失败: $urlStr")
+                }
+                val isPartialAppend = (code == HttpURLConnection.HTTP_PARTIAL && existingPartLen > 0L)
+                val expectedLen = conn.contentLengthLong
+                if (!isPartialAppend && dest.isFile && expectedLen > 0 && dest.length() == expectedLen) {
+                    return
+                }
+                conn.inputStream.use { input ->
+                    FileOutputStream(tmp, isPartialAppend).use { output ->
+                        input.copyTo(output, 64 * 1024)
+                    }
+                }
+                if (dest.exists()) dest.delete()
+                tmp.renameTo(dest)
                 return
+            } finally {
+                conn.disconnect()
             }
-            conn.inputStream.use { input ->
-                tmp.outputStream().use { output -> input.copyTo(output, 64 * 1024) }
-            }
-            if (dest.exists()) dest.delete()
-            tmp.renameTo(dest)
-        } finally {
-            conn.disconnect()
         }
     }
 }
