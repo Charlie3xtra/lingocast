@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "LingoCast Series Manifest",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "seriesId",
+    "title",
+    "titleZh",
+    "description",
+    "accent",
+    "cefrRange",
+    "coverPath",
+    "episodeCount",
+    "totalDurationMs",
+    "updatedAt",
+    "episodes"
+  ],
+  "properties": {
+    "schemaVersion": { "type": "integer", "const": 1 },
+    "seriesId": { "type": "string", "minLength": 1 },
+    "title": { "type": "string", "minLength": 1 },
+    "titleZh": { "type": "string", "minLength": 1 },
+    "description": { "type": "string" },
+    "accent": { "type": "string" },
+    "cefrRange": { "type": "string" },
+    "coverPath": { "type": "string" },
+    "episodeCount": { "type": "integer", "minimum": 1 },
+    "totalDurationMs": { "type": "integer", "minimum": 0 },
+    "updatedAt": { "type": "string" },
+    "episodes": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "episodeId",
+          "index",
+          "title",
+          "titleZh",
+          "cefrLevel",
+          "topicTags",
+          "summaryZh",
+          "durationMs",
+          "hasVideo",
+          "videoSizeBytes",
+          "audioSizeBytes",
+          "sentenceCount",
+          "vocabCount",
+          "noteCount",
+          "coverFile",
+          "episodeJsonFile",
+          "audioFile"
+        ],
+        "properties": {
+          "episodeId": { "type": "string" },
+          "index": { "type": "integer", "minimum": 1 },
+          "title": { "type": "string" },
+          "titleZh": { "type": "string" },
+          "cefrLevel": { "type": "string" },
+          "topicTags": { "type": "array", "items": { "type": "string" } },
+          "summaryZh": { "type": "string" },
+          "durationMs": { "type": "integer", "minimum": 0 },
+          "hasVideo": { "type": "boolean" },
+          "videoSizeBytes": { "type": "integer", "minimum": 0 },
+          "audioSizeBytes": { "type": "integer", "minimum": 0 },
+          "sentenceCount": { "type": "integer", "minimum": 1 },
+          "vocabCount": { "type": "integer", "minimum": 0 },
+          "noteCount": { "type": "integer", "minimum": 0 },
+          "coverFile": { "type": "string" },
+          "episodeJsonFile": { "type": "string" },
+          "videoFile": { "type": ["string", "null"] },
+          "audioFile": { "type": "string" }
+        }
+      }
+    }
+  }
+}

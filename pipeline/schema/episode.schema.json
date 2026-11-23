@@ -1,0 +1,143 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "LingoCast Episode Study Bundle",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "episodeId",
+    "seriesId",
+    "index",
+    "title",
+    "titleZh",
+    "cefrLevel",
+    "topicTags",
+    "summaryZh",
+    "durationMs",
+    "media",
+    "subtitleSource",
+    "sentences",
+    "timelineNotes",
+    "vocabList"
+  ],
+  "properties": {
+    "schemaVersion": { "type": "integer", "const": 1 },
+    "episodeId": { "type": "string", "minLength": 1 },
+    "seriesId": { "type": "string", "minLength": 1 },
+    "index": { "type": "integer", "minimum": 1 },
+    "sourceFilename": { "type": "string" },
+    "title": { "type": "string", "minLength": 1 },
+    "titleZh": { "type": "string", "minLength": 1 },
+    "cefrLevel": { "type": "string" },
+    "topicTags": { "type": "array", "items": { "type": "string" } },
+    "summaryZh": { "type": "string" },
+    "durationMs": { "type": "integer", "minimum": 1 },
+    "media": {
+      "type": "object",
+      "required": ["audioFile", "coverFile", "hasVideo", "width", "height", "waveformPeaks"],
+      "properties": {
+        "videoFile": { "type": ["string", "null"] },
+        "audioFile": { "type": "string" },
+        "coverFile": { "type": "string" },
+        "hasVideo": { "type": "boolean" },
+        "width": { "type": "integer", "minimum": 0 },
+        "height": { "type": "integer", "minimum": 0 },
+        "waveformPeaks": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 0, "maximum": 100 }
+        }
+      }
+    },
+    "subtitleSource": {
+      "type": "object",
+      "required": ["tier", "engine", "hasBurnedSubs"],
+      "properties": {
+        "tier": { "type": "integer", "minimum": 0, "maximum": 3 },
+        "engine": { "type": "string" },
+        "hasBurnedSubs": { "type": "boolean" },
+        "ocrTitleRaw": { "type": ["string", "null"] },
+        "referenceUsed": { "type": ["string", "null"] }
+      }
+    },
+    "sentences": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "startMs", "endMs", "textEn", "textZh", "words"],
+        "properties": {
+          "id": { "type": "integer", "minimum": 0 },
+          "startMs": { "type": "integer", "minimum": 0 },
+          "endMs": { "type": "integer", "minimum": 0 },
+          "textEn": { "type": "string", "minLength": 1 },
+          "textZh": { "type": "string" },
+          "speaker": { "type": ["string", "null"] },
+          "words": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["w", "s", "e"],
+              "properties": {
+                "w": { "type": "string" },
+                "s": { "type": "integer", "minimum": 0 },
+                "e": { "type": "integer", "minimum": 0 },
+                "lemma": { "type": ["string", "null"] },
+                "vocabId": { "type": ["string", "null"] }
+              }
+            }
+          }
+        }
+      }
+    },
+    "timelineNotes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "sentenceId", "startMs", "endMs", "phrase", "category", "cefrLevel", "meaningZh", "usageTipZh"],
+        "properties": {
+          "id": { "type": "string" },
+          "sentenceId": { "type": "integer", "minimum": 0 },
+          "startMs": { "type": "integer", "minimum": 0 },
+          "endMs": { "type": "integer", "minimum": 0 },
+          "phrase": { "type": "string", "minLength": 1 },
+          "category": { "type": "string", "enum": ["idiom", "collocation", "ielts", "vocab", "grammar"] },
+          "cefrLevel": { "type": "string" },
+          "phonetic": { "type": ["string", "null"] },
+          "meaningZh": { "type": "string" },
+          "usageTipZh": { "type": "string" }
+        }
+      }
+    },
+    "vocabList": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "word", "lemma", "phonetic", "pos", "meaningZh", "cefrLevel", "tags", "collins", "oxford", "occurrences"],
+        "properties": {
+          "id": { "type": "string" },
+          "word": { "type": "string" },
+          "lemma": { "type": "string" },
+          "phonetic": { "type": "string" },
+          "pos": { "type": "string" },
+          "meaningZh": { "type": "string" },
+          "contextMeaningZh": { "type": ["string", "null"] },
+          "cefrLevel": { "type": "string" },
+          "tags": { "type": "array", "items": { "type": "string" } },
+          "collins": { "type": "integer", "minimum": 0 },
+          "oxford": { "type": "integer", "minimum": 0 },
+          "occurrences": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["sentenceId", "startMs", "endMs"],
+              "properties": {
+                "sentenceId": { "type": "integer", "minimum": 0 },
+                "startMs": { "type": "integer", "minimum": 0 },
+                "endMs": { "type": "integer", "minimum": 0 }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

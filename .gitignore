@@ -1,0 +1,36 @@
+# Local isolated toolchains, course packs, and release binaries
+/.toolchain/
+/data/
+/dist/
+/android/app/src/main/assets/ecdict_compact.db
+/android/app/src/main/assets/starter_pack/
+
+# Android / Gradle / Kotlin / IDE
+/android/.gradle/
+/android/.kotlin/
+/android/local.properties
+/android/build/
+/android/app/build/
+*.apk
+*.aab
+*.ap_
+*.dex
+*.jks
+*.keystore
+.idea/
+*.iml
+
+# Python / pytest / packaging
+**/__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+
+# OS / local secrets / logs
+.DS_Store
+Thumbs.db
+.env
+.env.*
+*.log
